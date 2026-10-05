@@ -141,10 +141,13 @@ namespace Unity.XR.PXR
         public bool fixedFoveatedSharpening;
         public bool selfAdaptiveSharpening;
 
+        public bool flipTextureY = false;
+        public bool copyTextureOnUpdateOnly = false;
 
         private bool toCreateSwapChain = false;
         private bool toCopyRT = false;
         private bool copiedRT = false;
+        private bool textureDirty = false;
         private int eyeCount = 2;
         private UInt32 imageCounts = 0;
         private PxrLayerParam overlayParam = new PxrLayerParam();
@@ -472,6 +475,8 @@ namespace Unity.XR.PXR
             toCreateSwapChain = false;
             toCopyRT = true;
             copiedRT = false;
+            textureDirty = true;
+            imageIndex = 0;
 
             FreePtr();
 
@@ -490,37 +495,57 @@ namespace Unity.XR.PXR
                 return copiedRT;
             }
 
-            if (!isDynamic && copiedRT)
+            if ((!isDynamic && copiedRT) ||
+                (isDynamic && copyTextureOnUpdateOnly && copiedRT && !textureDirty))
+            {
+                return true;
+            }
+
+            if (null == nativeTextures || null == layerTextures)
             {
                 return copiedRT;
             }
 
-            if (null == nativeTextures)
-            {
-                return false;
-            }
-
+            int candidateImageIndex = imageIndex;
             if (enableSubmitLayer)
             {
-                PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(overlayIndex, ref imageIndex);
+                PXR_Plugin.Render.UPxr_GetLayerNextImageIndexByRender(overlayIndex, ref candidateImageIndex);
             }
+
+            if (candidateImageIndex < 0 || candidateImageIndex >= imageCounts)
+            {
+                return copiedRT;
+            }
+
             for (int i = 0; i < eyeCount; i++)
             {
-                Texture nativeTexture = nativeTextures[i].textures[imageIndex];
-
-                if (null == nativeTexture || null == layerTextures[i])
-                    continue;
-
-                RenderTexture texture = layerTextures[i] as RenderTexture;
+                if (i >= nativeTextures.Length ||
+                    null == nativeTextures[i].textures ||
+                    candidateImageIndex >= nativeTextures[i].textures.Length ||
+                    i >= layerTextures.Length ||
+                    null == nativeTextures[i].textures[candidateImageIndex] ||
+                    null == layerTextures[i])
+                {
+                    return copiedRT;
+                }
 
                 if (OverlayShape.Cubemap == overlayShape && null == layerTextures[i] as Cubemap)
                 {
-                    return false;
+                    return copiedRT;
                 }
+            }
+
+            for (int i = 0; i < eyeCount; i++)
+            {
+                Texture nativeTexture = nativeTextures[i].textures[candidateImageIndex];
+                RenderTexture texture = layerTextures[i] as RenderTexture;
 
                 for (int f = 0; f < (int)overlayParam.faceCount; f++)
                 {
-                    if (QualitySettings.activeColorSpace == ColorSpace.Gamma && texture != null && texture.format == RenderTextureFormat.ARGB32)
+                    if (!flipTextureY &&
+                        QualitySettings.activeColorSpace == ColorSpace.Gamma &&
+                        texture != null &&
+                        texture.format == RenderTextureFormat.ARGB32)
                     {
                         Graphics.CopyTexture(layerTextures[i], f, 0, nativeTexture, f, 0);
                     }
@@ -547,19 +572,30 @@ namespace Unity.XR.PXR
                         }
                         else
                         {
-                            textureM.mainTexture = texture;
+                            textureM.mainTexture = layerTextures[i];
                             textureM.SetPass(0);
                             textureM.SetInt("_premultiply", usePremultipliedAlpha ? 1 : 0);
+                            textureM.SetInt("_FlipY", flipTextureY ? 1 : 0);
                             Graphics.Blit(layerTextures[i], renderTexture, textureM);
                         }
                         Graphics.CopyTexture(renderTexture, 0, 0, nativeTexture, f, 0);
                         RenderTexture.ReleaseTemporary(renderTexture);
                     }
                 }
-                copiedRT = true;
             }
 
-            return copiedRT;
+            imageIndex = candidateImageIndex;
+            copiedRT = true;
+            textureDirty = false;
+            return true;
+        }
+
+        public void MarkTextureDirty()
+        {
+            if (!isExternalAndroidSurface && !isClones)
+            {
+                textureDirty = true;
+            }
         }
 
         public void SetTexture(Texture texture, bool dynamic)
@@ -587,7 +623,10 @@ namespace Unity.XR.PXR
             }
 
             toCopyRT = false;
-            PXR_Plugin.Render.UPxr_DestroyLayerByRender(overlayIndex);
+            if (overlayIndex > 0)
+            {
+                PXR_Plugin.Render.UPxr_DestroyLayerByRender(overlayIndex);
+            }
             ClearTexture();
             for (int i = 0; i < layerTextures.Length; i++)
             {
@@ -595,6 +634,12 @@ namespace Unity.XR.PXR
             }
 
             isDynamic = dynamic;
+            if (texture == null)
+            {
+                return;
+            }
+
+            textureDirty = true;
             InitializeBuffer();
 
             if (!isClones)
@@ -680,6 +725,11 @@ namespace Unity.XR.PXR
         private void ClearTexture()
         {
             FreePtr();
+            toCreateSwapChain = false;
+            toCopyRT = false;
+            copiedRT = false;
+            textureDirty = false;
+            imageIndex = 0;
 
             if (isExternalAndroidSurface || null == nativeTextures || isClones)
             {

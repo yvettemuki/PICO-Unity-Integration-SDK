@@ -2,6 +2,7 @@
     Properties{
         _MainTex("Base (RGB) Trans (A)", 2D) = "white" {}
         _premultiply("Pre-multiply alpha", Int) = 0
+        _FlipY("Flip texture vertically", Int) = 0
         _Gamma("Gamma", Range(0.1, 5)) = 1.0
 
     }
@@ -34,6 +35,7 @@
                 sampler2D _MainTex;
                 float4 _MainTex_ST;
                 int _premultiply;
+                int _FlipY;
                 float _Gamma;
 
                 v2f vert (appdata_t v)
@@ -41,6 +43,8 @@
                     v2f o;
                     o.vertex = UnityObjectToClipPos(v.vertex);
                     o.texcoord = TRANSFORM_TEX(v.texcoord, _MainTex);
+                    if (_FlipY != 0)
+                        o.texcoord.y = 1.0 - o.texcoord.y;
                     return o;
                 }
 
