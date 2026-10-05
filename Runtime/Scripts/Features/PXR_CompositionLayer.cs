@@ -487,7 +487,7 @@ namespace Unity.XR.PXR
         {
             if (isClones)
             {
-                return true;
+                return !isClonesToNew;
             }
 
             if (!toCopyRT)
